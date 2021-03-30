@@ -1,0 +1,99 @@
+library(logicFS)
+library(LogicReg)
+library(dplyr)
+library(varhandle)
+library(GenomicRanges)
+library(survival)
+library(survminer)
+library(ggplot2)
+library(ggthemes)
+setwd("~/Salma/Genome - Lab/NPM1/Data Files/2021-02-04")
+clin <- read.table("NPM1_mutated_AML_INFO.txt",
+                   sep="\t", row.names = 1,
+                   header = TRUE,
+                   stringsAsFactors = TRUE)
+Meth <- read.table("NPM1_mutated_AML_DNAmethylation_LSC17_calls (1).txt",
+                   sep="\t", row.names = 1,
+                   header = TRUE,stringsAsFactors = FALSE)
+
+Mut <- read.table("NPM1_mutated_AML_MISEQ_VAF_10_percent.txt",
+                  sep="\t", row.names = 1, header = TRUE, stringsAsFactors = FALSE)
+
+rownames(Meth) <- Meth[,1]
+
+w <- which(colnames(Mut) == "IDH2type_mut10")
+V= (Mut[, w])
+ms <- Mut[, -w]
+rm(w)
+
+w <- which(colnames(ms) == "ITDWTRT")
+V= (ms[, w])
+ms <- ms[, -w]
+rm(w)
+
+moo <- sub("_upd","", sub("_mut10","", colnames(ms)))
+moo
+colnames(ms) <- moo
+
+
+
+flt3combo <- filter(ms, flt3combo == 1)
+flt3comboNotSMC3 <- filter(flt3combo, SMC3 == 0) 
+flt3comboNotidh2 <- filter(flt3combo, idh2 == 0)
+flt3comboNotidh2NotFLT3TKD <- filter(flt3comboNotidh2, FLT3TKD == 0 )
+
+X = row.names(clin) %in% row.names(flt3combo)
+table(X)
+clin1 <- clin[X,]
+clin1 <- clin1[,c(31,33,37)]
+order_idx <- match(rownames(flt3combo), rownames(clin1))
+clin1 <- clin1 [order_idx,]
+all(rownames(flt3combo) == rownames(clin1))
+
+X = row.names(clin) %in% row.names(flt3comboNotidh2)
+table(X)
+clin3 <- clin[X,]
+clin3 <- clin3[,c(31,33,37)]
+order_idx <- match(rownames(flt3comboNotidh2), rownames(clin3))
+clin3 <- clin3 [order_idx,]
+all(rownames(flt3comboNotidh2) == rownames(clin3))
+
+X = row.names(clin) %in% row.names(flt3comboNotidh2NotFLT3TKD)
+table(X)
+clin4 <- clin[X,]
+clin4 <- clin4[,c(31,33,37)]
+order_idx <- match(rownames(flt3comboNotidh2NotFLT3TKD), rownames(clin4))
+clin4 <- clin4 [order_idx,]
+all(rownames(flt3comboNotidh2NotFLT3TKD) == rownames(clin4))
+
+
+flt3.1 <- survfit(Surv(clin1$survyr, clin1$sstat) ~ SMC3, data = flt3combo)
+print(flt3.1)
+summary(flt3.1)$table
+
+flt3.2 <- survfit(Surv(clin1$survyr, clin1$sstat) ~ idh2, data = flt3combo)
+print(flt3.2)
+summary(flt3.2)$table
+
+flt3.3 <- survfit(Surv(clin1$survyr, clin1$sstat) ~ NOTCH1, data = flt3combo)
+print(flt3.3)
+
+flt3.4 <- survfit(Surv(clin1$survyr, clin1$sstat) ~ WT1, data = flt3combo)
+print(flt3.4)
+
+flt3.5 <-  survfit(Surv(clin1$survyr, clin1$sstat) ~ FLT3TKD, data = flt3combo)
+print(flt3.5)
+
+flt3c <- list(fit1 = flt3.1, fit2 = flt3.2, fit3 = flt3.3,fit4 = flt3.4, fit5 = flt3.5)
+ggsurvplot_combine(flt3c, flt3combo, theme = theme_calc(), palette = c("#E7B800", "#2E9FDF", "red", "blue", "black", "orange", "brown", "pink", "green", "grey"), size = 0.7)
+
+
+flt3.idh2.1 <- survfit(Surv(clin3$survyr, clin3$sstat) ~ SMC3, data = flt3comboNotidh2)
+print(flt3.idh2.1)
+flt3.idh2.2 <- survfit(Surv(clin3$survyr, clin3$sstat) ~ NOTCH1, data = flt3comboNotidh2)
+print(flt3.idh2.2)
+flt3.idh2.3 <- survfit(Surv(clin3$survyr, clin3$sstat) ~ FLT3TKD, data = flt3comboNotidh2)
+print(flt3.idh2.2)
+flt3idh2 <- list( fit1 = flt3.idh2.1, fit2 = flt3.idh2.2, fit3 = flt3.idh2.3)
+ggsurvplot_combine(flt3idh2, flt3comboNotidh2)
+    

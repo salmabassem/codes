@@ -1,0 +1,1524 @@
+
+```{r prep_data, message=FALSE, warning = FALSE}
+
+#install.packages("usethis")
+#install.packages("rmarkdown")
+
+library(devtools)
+#library(msSurv)
+library(rmarkdown)
+
+
+#install_github("mg14/mg14")
+#install_github("mg14/CoxHD/CoxHD")
+
+library(CoxHD)
+library(mg14)
+library(DT)
+library(htmlwidgets)
+library(tinytex)
+library(dplyr)
+
+
+drop <- c("list_id","Sample","PATID")
+drop_samp <- c("list_id","PATID")
+
+sampleNames <- read.csv("Alliance_sampleids_final.csv", header = TRUE, 
+                        check.names = FALSE, stringsAsFactors = FALSE)
+
+sampleNames_new <-  sampleNames[,!(names(sampleNames) %in% drop_samp)]
+
+
+MinOccurances = 25
+
+
+## Clinical Data 
+Clinical = read.csv("Alliance_clincial_final.csv", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE)
+rownames(Clinical) <- Clinical$Sample
+Clin_new <-  Clinical[,!(names(Clinical) %in% drop)]
+
+
+#Epitype
+Epitype = read.csv("Alliance_epitype_final.csv", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE)
+rownames(Epitype) <- Epitype$Sample
+Epitype_new <-  Epitype[,!(names(Epitype) %in% drop)]
+for (i in 1:ncol(Epitype_new)){Epitype_new[,i] <- as.numeric(Epitype_new[,i])}
+
+
+## Genetics 
+Genetics = read.csv("Alliance_genetics_JK21_a.csv", header = TRUE, 
+                    check.names = FALSE, stringsAsFactors = FALSE)
+
+rownames(Genetics) <- Genetics$Sample
+
+Gen_new = Genetics[,!(names(Genetics) %in% drop)]
+n <- which(colnames(Gen_new) == "CEBPA_mono" | colnames(Gen_new) == "CEBPA_bi")
+Gen_new <- Gen_new[,-n]
+
+
+
+## Cytogenetics 
+Cytogenetics = read.csv("Alliance_cytogenetics_final.csv", header = TRUE, 
+                        check.names = FALSE, stringsAsFactors = FALSE)
+rownames(Cytogenetics) <- Cytogenetics$Sample
+
+Cyto_new <- Cytogenetics[,!(names(Cytogenetics) %in% drop)]
+
+
+## Demographics 
+Demographics = read.csv("Alliance_demographics_final.csv", header = TRUE, 
+                        check.names = FALSE, stringsAsFactors = FALSE)
+rownames(Demographics) <- Demographics$Sample
+Dem_new <- Demographics[,!(names(Demographics) %in% drop)]
+
+
+
+#this is set so it will count the number of occurrences and not just non NA cells later for n in Wald test
+#Clin_new$Splenomegaly[Clin_new$Splenomegaly == 0] <- NA
+#Clin_new$tAML[Clin_new$tAML == 0] <- NA
+
+
+
+## Nuisance and Annotation 
+Nuisance = read.csv("detailed data about age and protocol.csv", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE)
+rownames(Nuisance) <- Nuisance$Sample_Id
+colnames(Nuisance)[1] <- "Sample"
+Nuisance <- as.data.frame(Nuisance[,-c(4,6)])
+Nuisance_new <-  as.data.frame(Nuisance[,!(names(Nuisance) %in% drop)])
+rownames(Nuisance_new) <- gsub("*  EXTRA*","",rownames(Nuisance_new))
+
+library(dplyr)
+Nuisance_new <- filter(Nuisance_new, rownames(Nuisance_new) %in% rownames(Epitype_new))
+unique(Nuisance_new$PROTOCOL)
+Annotation = read.csv("Annotated data n=1266 JK incl. ELN2022,bzip,drugtx 12212022.csv", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE, row.names = 1)
+Annotation_new <- as.data.frame(Annotation[rownames(Epitype_new),])
+Nuisance_new <- transform(merge(Annotation_new["drug"], Nuisance_new, by = 0, all = TRUE), row.names = 1)
+colnames(Nuisance_new)[1] <- "Drug"
+
+Nuisance_new <- transform(merge(Epitype_new, Nuisance_new, by = 0, all = TRUE), row.names = 1)
+Nuisance_new <- transform(merge(Epitype_new, Nuisance_new, by = 0), row.names = 1)
+
+Nuisance_new <- Nuisance_new[ ,c("Drug", "PROTOCOL")]
+
+library(mltools) ## creating dummy columns 
+library(data.table)
+
+Nuisance_new$PROTOCOL <- as.factor(Nuisance_new$PROTOCOL)
+Nuisance_new$Drug <- as.factor(Nuisance_new$Drug)
+rowz <- rownames(Nuisance_new)
+newdata <- as.data.frame(one_hot(as.data.table(Nuisance_new["PROTOCOL"])))
+rownames(newdata) <- rowz
+
+sumz <- colSums(newdata, na.rm = T)
+
+## Keep only the 7 protocols 
+
+newdata <- newdata[,c("PROTOCOL_8525", "PROTOCOL_8821", "PROTOCOL_9022", "PROTOCOL_9720", "PROTOCOL_10503", "PROTOCOL_10603", "PROTOCOL_11002", "PROTOCOL_19808")]
+
+Nuisance_new <- newdata
+Nuisance_new <-  as.data.frame(Nuisance_new[,!(names(Nuisance_new) %in% drop)])
+
+for (i in 1:ncol(Nuisance_new)){Nuisance_new[,i] <- as.numeric(Nuisance_new[,i])}
+
+## Adding new bzip annotation 
+
+Gen_new2 <- cbind(Gen_new, Annotation_new[c("cebpa_bzip", "cebpa_other")])
+Gen_new <- Gen_new2
+
+
+dataList <-list(Gen_new,
+                Dem_new,
+                Clin_new,
+                Cyto_new, 
+                Nuisance_new,
+                Epitype_new
+                )
+
+
+names(dataList) <- c("Genetics", "Demographics", "Clinical","Cytogenetics", "Nuisance", "Epitype")
+
+## Filteration 
+
+library(dplyr)
+
+for(i in 1 :6){
+  dataList[[i]] <- filter(dataList[[i]], rownames(dataList[[i]]) %in% rownames(Clin_new))
+}
+
+```
+
+
+
+making the interactions set and other things to get data together
+no epi/cyto or epi/genetic interactions
+
+```{r interactions, message=FALSE, warning = FALSE}
+
+dataList$GeneGene <- MakeInteractions(data.frame(dataList$Genetics), 
+                          data.frame(dataList$Genetics))[,as.vector(upper.tri(matrix(0,ncol=ncol(dataList$Genetics),
+                                                                                                nrow=ncol(dataList$Genetics))))]
+dataList$GeneGene <- dataList$GeneGene[,colSums(dataList$GeneGene, na.rm=TRUE)>0] 
+dataList$GeneGene$`NPM1:FLT3_ITD:DNMT3A` <- (rowSums(dataList$Genetics[c('NPM1',"FLT3_ITD","DNMT3A")])==3)+0 
+## Add NPM1:FLT3_ITD:DNMT3A product term as well
+
+
+dataList$CytoCyto <- MakeInteractions(dataList$Cytogenetics,        dataList$Cytogenetics)[,sapply(1:ncol(dataList$Cytogenetics), `<`,1:ncol(dataList$Cytogenetics))]
+
+dataList$CytoCyto <- dataList$CytoCyto[, colSums(dataList$CytoCyto, na.rm=TRUE) > 0]
+dataList$GeneCyto <- MakeInteractions(dataList$Genetics, dataList$Cytogenetics)
+dataList$GeneCyto <- dataList$GeneCyto[,colSums(dataList$GeneCyto, na.rm=TRUE) > 0]
+
+dataRaw <- do.call(cbind,dataList)
+names(dataRaw) <- unlist(sapply(dataList, names))
+dataFrame <- StandardizeMagnitude(dataRaw)
+#dataFrame <- dataRaw
+dim(dataFrame)
+
+
+groups <- unlist(sapply(names(dataList), function(x) rep(x, ncol(dataList[[x]]))))
+groups[grepl("^(t_)|(inv)", colnames(dataFrame)) &! grepl(":", colnames(dataFrame))] <- "Fusions"
+groups[groups=="Cytogenetics"] <- "CNA"
+groups <- factor(groups)
+names(groups) <- colnames(dataFrame)
+table(groups)
+```
+
+imputation
+```{r impute, message=FALSE, warning = FALSE}
+
+#Poor man's imputation by column means
+
+rowss <- rownames(dataFrame)
+poorMansImpute <- function(x) {x[is.na(x)] <- mean(x, na.rm=TRUE); return(x)}
+dataFrame <- as.data.frame(sapply(dataFrame, poorMansImpute))
+rownames(dataFrame) <- rowss
+```
+
+
+outcome data
+
+```{r outcome, message=FALSE,warning=FALSE}
+
+osDATA <- read.csv("Alliance_outcome_final.csv", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE)
+#head(osDATA)
+rownames(osDATA) <- osDATA$Sample
+osDATA <- filter(osDATA, rownames(osDATA) %in% rownames(Clin_new))
+
+#osDATA <- filter(osDATA, !rownames(osDATA) %in% patientsdrop)
+
+
+
+#@we didn't change this to a new variable.  I needed to drop the one APL patient, so I used osdata2 for a minute
+osDATA <- osDATA[,!(names(osDATA) %in% drop)]
+
+#head(osDATA)
+
+for (i in 2:ncol(osDATA)){osDATA[,i] <- as.numeric(as.character(osDATA[,i]))}
+
+#Looking at OS data: 
+
+
+osDATA[,3] <- osDATA[,2]/365
+colnames(osDATA)[3] <- "OSyr"
+
+
+os <- Surv(osDATA$OS, osDATA$STATUS) #OS
+osTD <-  Surv(time = rep(0, nrow(osDATA)), time2=osDATA$OS, event=osDATA$STATUS )
+
+osYr <- Surv(osDATA$OSyr, osDATA$STATUS) #OS
+osYrTD <-  Surv(time = rep(0, nrow(osDATA)), time2=osDATA$OSyr, event=osDATA$STATUS )
+
+#Column 2 is the OS (survyr).
+osYrTD[,1] <- osYrTD[,1]/365
+```
+
+color set
+``` {r setup2, message=FALSE,warning=FALSE}
+set1 <- brewer.pal(9, "Set1")
+```
+
+
+
+
+
+2.3.1 Number of oncogenic mutations
+
+``` {r number_mut, message=FALSE,warning=FALSE}
+
+dataFrameOsTD <- dataFrame
+
+
+#Define some indexes relating to subsets of variables used by the random effects model.
+mainGroups <- grep("[A-Z][a-z]+[A-Z]",levels(groups), invert=TRUE, value=TRUE)
+mainGroups
+
+mainIdx <- groups %in% mainGroups
+osIdx <- !grepl("TPL", colnames(dataFrame)) ## Exclude TPL from OS analyses..
+whichRFXOs <- which((colSums(dataFrame)>=MinOccurances | mainIdx) & osIdx) # ie, > 0.5%
+mainIdxOs <- mainIdx & osIdx
+osTDIdx <- !grepl("TPL_efs", colnames(dataFrame))
+whichRFXOsTD <- which((colSums(dataFrame)>=MinOccurances | mainIdx) & osTDIdx) # ie, > 0.5%
+mainIdxOsTD <- mainIdx & osTDIdx
+whichRFXOsGG <- which((colSums(dataFrame)>=MinOccurances | mainIdxOs) & osIdx & 
+                        groups %in% c(mainGroups,"GeneGene", "GeneCyto")) # ie, > 0.5%
+
+#Compute the number of oncogenics, excluding complex karyotype.
+NONC <- rowSums(cbind(dataList$Cytogenetics[names(dataList$Cytogenetics)!="complex"], 
+                      dataList$Genetics), na.rm=TRUE)
+
+NONCs <- factor(ceiling(pmin(NONC,6)/2), labels=c("0-1","2-3","4-6","7+"))
+c <- set1[c(3,2,4,1,5)]
+f <- survfit(osYr ~ NONCs)
+```
+
+
+survival plot
+``` {r survival, message=FALSE,warning=FALSE}
+
+s <- summary(f)
+plot(f, col=c, xlim=c(0,10),xlab="Years", ylab="Survival",mark="|", cex=.5)
+legend('topright', bty='n', col=c, legend=paste0(levels(NONCs)," (n=",table(NONCs),")"), lty=1)
+```
+
+
+
+
+2.3.1.1.1 Linearity of continuous variables
+Fit a spline through continuous covariates
+
+``` {r spline, message=FALSE,warning=FALSE}
+
+set.seed(42)
+trainIdx <- sample(c(TRUE,FALSE), nrow(dataFrame), replace=TRUE, prob=c(0.66,0.34))
+trainIdxOsTD <- trainIdx
+par(mfrow=c(3,3))
+clinicalSpline <- as.data.frame(sapply(dataFrame[groups %in% c("Clinical","Demographics")], function(x){
+  if(all(x[1:5] %in% 0:10)) return(x)
+  y <- log(x+min(x)+1e-3)
+  fit <- coxph(os ~ pspline(y, df=3), subset=trainIdx)
+  predict(fit, newdata=data.frame(y=y))
+}))
+for(n in names(clinicalSpline)) if(!all(dataFrame[1:5,n] %in% 0:10))
+  plot(dataFrame[,n], clinicalSpline[,n], log='x', xlab=paste(n, '[observed]'), ylab = paste(n, '[spline]'))
+
+```
+
+
+concordance
+```{r concordance, message=FALSE, warning=FALSE}
+
+summary(coxph(os ~ ., data=clinicalSpline, subset=!trainIdx))$concordance
+###copy output###
+
+summary(coxph(os ~ ., data=dataFrame[groups %in% c("Clinical","Demographics")]), subset=!trainIdx)$concordance
+###copy output###
+
+survConcordance(os[!trainIdx] ~ predict(coxph(os ~ ., data=clinicalSpline, subset=trainIdx),
+                                        newdata = clinicalSpline[!trainIdx,]))
+survConcordance(os[!trainIdx] ~ predict(coxph(os ~ ., data=dataFrame[groups %in% c("Clinical","Demographics")], 
+                                              subset=trainIdx), newdata = dataFrame[!trainIdx,]))
+```
+
+
+
+2.3.2 Random effects models
+
+```{r fitting, message=FALSE, warning=FALSE}
+
+#Here we fit the random effects model using our implementation in the CoxHD package. First for main effects only
+coxRFXFitOsTDMain <- CoxRFX(dataFrameOsTD[,mainIdxOsTD], osTD, groups[mainIdxOsTD], verbose = TRUE, max.iter = 100)
+#Now including gene:gene interaction terms (min. recurrence = 8)
+whichRFXOsTDGG <- which((colSums(dataFrame)>=MinOccurances | mainIdxOsTD) 
+                        & osTDIdx & groups %in% c(mainGroups,"GeneGene")) 
+coxRFXFitOsTDGGc <- CoxRFX(dataFrameOsTD[,whichRFXOsTDGG], osTD, groups[whichRFXOsTDGG], 
+                           which.mu=mainGroups, verbose = TRUE, max.iter = 100) 
+## allow only the main groups to have mean different from zero.. 
+
+
+#Compute Harrel's concordance index
+
+################## make sure it is finished running before continuing#################
+###copy output###
+```
+
+more concordance
+```{r concord2,message=FALSE, warning=FALSE}
+
+survConcordance(osTD~coxRFXFitOsTDGGc$linear.predictors)
+
+```
+
+```{r concord3,message=FALSE, warning=FALSE}
+survConcordance(osTD~coxRFXFitOsTDMain$linear.predictors)
+
+```
+
+
+
+
+2.3.2.1 Variance components
+Here we compute the variance components.
+```{r piechart_all, message=FALSE, warning=FALSE}
+
+
+
+
+colGroups <- c("#E41A1C" , "#33A02C", "#FF7F00", "#FB9A99", "#A65628", "#6A3D9A", "#999999", "#A6CEE3", "#1F78B4", '#DAA520')
+
+names(colGroups) <- levels(groups)[order(toupper(levels(groups)))]
+
+Fig1<-PlotVarianceComponents(coxRFXFitOsTDGGc, col=colGroups,absolute = FALSE)
+title("Risk contributions OS (time-dep)")
+
+#pdf(Fig1)
+#dev.print(pdf, file="filename.pdf")
+
+```
+
+
+
+2.3.3 Confidence intervals and significance tests
+Estimate confidence intervals by parametric bootstrap and compare with Wald Test. 
+Note that the usual sample with replacement yields inconsistencies for the interaction terms 
+due to the overdispersed correlations. The theoretical description of the survival time simulation
+is given in section survival.
+TAKES A WHILE TO RUN
+
+```{r ci_etc, message=FALSE, warning=FALSE}
+
+set.seed(42)
+risk <- as.matrix(dataFrame[whichRFXOsTDGG]) %*% coxRFXFitOsTDGGc$coefficients
+risk <- risk - mean(risk)
+
+
+```
+
+```{r}
+SimSurvNonpS <- function(risk, surv, H0 = basehaz(coxph(surv ~ 1))) {
+H0 = basehaz(coxph(os ~ 1))
+FHazInv <- splinefun(c(0,H0$hazard), c(0,H0$time), method="monoH.FC", ties=min)
+n = length(risk)
+deathTimes = FHazInv(rexp(n, exp(risk))) #predict(hazardDist, rexp(n, exp(risk))) }
+
+f <- os
+f[,2] <- 1-f[,2]
+F <- survfit(f~1)
+FCensInv <- splinefun(F$surv, F$time, ties=min )
+censTimes <- FCensInv(runif(n,0,1)) ## Simulate censoring times
+
+survOut <-  Surv(time = pmax(0,pmin(deathTimes, censTimes)), event=(deathTimes < censTimes)+0)
+return(survOut) }
+
+
+```
+
+#########this takes time###################
+
+parBoot <- mclapply(1:100, function(i) {
+  s <- SimSurvNonpS(risk, os)
+  c <- try(CoxRFX(dataFrame[whichRFXOsTDGG], s, groups=groups[whichRFXOsTDGG], sigma0=0.1, nu=0))
+  if(inherits(c, "try-error"))
+    return(s)
+  c$Z <- NULL # set X to zero to save mem
+  return(c)
+} )
+save(parBoot, file = "parBootNuisbZIPEpi.Rda")
+
+```{r}
+
+load(file = "parBootNuisbZIPEpi.Rda")
+
+```
+
+
+Distributions of mean, sigma and df
+
+
+```{r boxplot_sigma2, message=FALSE, warning=FALSE}
+
+
+#Distributions of mean, sigma and df
+boxplot(t(sapply(parBoot, `[[`, "sigma2")), border=colGroups[names(parBoot[[1]]$sigma2)], lty=1, pch=16, staplewex=0, ylab="sigma2", las=2, log="y", ylim=c(1e-3,8))
+abline(h=0, lty=3)
+points(coxRFXFitOsTDGGc$sigma2,  pch=19)
+```
+
+```{r boxplot_mu, message=FALSE, warning=FALSE}
+
+
+boxplot(t(sapply(parBoot, `[[`, "mu")), border=colGroups[names(parBoot[[1]]$mu)], lty=1, pch=16, staplewex=0, ylab="mu", las=2)
+abline(h=0, lty=3)
+points(coxRFXFitOsTDGGc$mu,  pch=19)
+```
+
+
+
+
+
+
+```{r boxplot_df, message=FALSE, warning=FALSE}
+
+
+boxplot(t(sapply(parBoot, `[[`, "df")), border=colGroups[names(parBoot[[1]]$mu)], lty=1, pch=16, staplewex=0, ylab="df", las=2)
+abline(h=0, lty=3)
+points(coxRFXFitOsTDGGc$df,  pch=19)
+```
+
+
+
+
+
+
+
+```{r bootstrap, message=FALSE, warning=FALSE}
+
+
+#Coefficients
+v <- apply(sapply(parBoot, `[[`, "coefficients"), 1, var, na.rm=TRUE)
+w <- diag(coxRFXFitOsTDGGc$var) ## H^{-1}
+w2 <- diag(coxRFXFitOsTDGGc$var2) ## H^{-1} I H^{-1}
+c <- coef(coxRFXFitOsTDGGc)
+
+
+plot(c^2/v, c^2/w, log="xy", xlab="Chi2 (bootstrap)", ylab="Chi2 (analyt.)", cex=.66)
+par(xpd=NA)
+points(c^2/v, c^2/w2, pch=16, cex=.7)
+arrows(c^2/v, c^2/w, c^2/v,c^2/w2, length=0.05)
+abline(0,1)
+abline(h=qchisq(c(0.95,0.99,0.999), 1, lower.tail=TRUE), lty=c(1,2,3))
+```
+
+
+
+```{r wald, message=FALSE, warning=FALSE}
+
+
+pBoot <- pchisq(c^2/v,1, lower.tail=FALSE)
+pVar2 <- pchisq(c^2/w2,1, lower.tail=FALSE)
+pVar <- pchisq(c^2/w,1, lower.tail=FALSE)
+
+
+MainData <- dataRaw[whichRFXOsTDGG]
+
+
+
+waldOut <- data.frame(group = groups[whichRFXOsTDGG], 
+                      `beta (log-hazard)`= c, 
+                      `hazard exp(beta)` = exp(c),
+                      n = ifelse(groups[whichRFXOsTDGG] %in% c("CNA","Fusions","Genetics","GeneGene", "Nuisance", "Epitype"), 
+                                 colSums(dataRaw[sub("_10*$","",names(whichRFXOsTDGG))], na.rm=TRUE), NA),
+                      
+                      n2 = ifelse(groups[whichRFXOsTDGG] %in% c("Demographics","Clinical"), 
+                                 colSums(MainData != "", na.rm=TRUE), NA),
+                      
+
+                  
+                      
+                      sd = sqrt(w2), 
+                       
+                      `sd (var)`= sqrt(w),
+                      `P-value`=pVar2,
+                      `Q (Benjamini-Yekutieli)` = p.adjust(pVar2, "BY"),
+                      `Q (Benjamini-Hochberg)` = p.adjust(pVar2, "BH"),
+                      check.names=FALSE
+)
+
+
+is.numeric(waldOut$n)
+is.numeric(waldOut$n2)
+
+
+
+waldOut$n2[is.na(waldOut$n2)] <- 0
+waldOut$n[is.na(waldOut$n)] <- 0
+
+waldOut$n <- waldOut$n + waldOut$n2
+
+waldOut <- waldOut[,-5]
+
+
+
+datatable(as.data.frame(lapply(waldOut, function(x) if(class(x)=="numeric") round(x,4) else x), 
+                        check.names=FALSE, row.names=row.names(waldOut)))
+
+waldOutDataTable <- as.data.frame(lapply(waldOut, function(x) if(class(x)=="numeric") round(x,4) else x), 
+                                  check.names=FALSE, row.names=row.names(waldOut))
+
+write.csv(waldOutDataTable, file= "Alliance with epi componant hazards min occurence 25 09292021.csv")
+
+
+```
+
+
+
+
+```{r volcano, message=FALSE, warning=FALSE}
+
+#Volcano plot[]
+par(mar=c(3,3,1,1)+.1,  bty="n", mgp=c(2,.5,0))
+i <- coxRFXFitOsTDGGc$groups %in% c("Genetics", "CNA","Fusions","GeneGene", "Nuisance", "Epitype")#apply(coxRFXFitOsTDGGc$Z,2,min) == 0 & apply(coxRFXFitOsTDGGc$Z,2,max) == 1
+p <- pVar2 ## pvalues coxRFX
+
+plot(c, 1/p, log='y', col=paste(colGroups[as.character(coxRFXFitOsTDGGc$groups)],"BB", sep=""), pch=ifelse(i,16,16), ylab="P-value",xlab="log hazard", cex=ifelse(i, sqrt(colMeans(coxRFXFitOsTDGGc$Z)*50),1), xlim=range(c*1.2))
+#abline(h=qchisq(c(0.95,0.99,0.999), 1, lower.tail=TRUE), lty=c(1,2,3))
+w <- which(p.adjust(p,"BH") < 0.1)
+points(c[w], 1/p[w],  pch=1, cex=ifelse(i[w], sqrt(colMeans(coxRFXFitOsTDGGc$Z[,w])*50),1))
+w <- which(p.adjust(p,"BH") < 0.05)
+par(xpd=NA)
+text(c[w], 1/p[w], names(c[w]), pos=3)
+u <- par("usr")
+f <- c(0.01,0.05,0.1,0.2,0.5)
+s <- sqrt(f*50)
+legend("topright",legend=f, pch=16, pt.cex=s, bty='n', col=paste("#88888888"))
+par(xpd=FALSE)
+#abline(h=1/0.05, lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.05)]), lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.1)]), lty=3)
+
+```
+
+
+
+
+Distribution of the variance components
+
+
+```{r boxplot_var, message=FALSE, warning=FALSE}
+
+v <- t(sapply(parBoot, function(x) {t <- try(VarianceComponents(x, newZ=dataFrame[whichRFXOsTDGG])); if(class(t)=="try-error") rep(NA, nlevels(x$groups)+1) else t}))
+boxplot(v, border=colGroups[colnames(v)], lty=1, pch=16, staplewex=0, ylab="variance comp.", las=2)
+abline(h=0, lty=3)
+points(VarianceComponents(coxRFXFitOsTDGGc),  pch=19)
+
+```
+
+
+
+
+
+```{r loghazard, message=FALSE, warning=FALSE}
+#Plot of log hazard v outcome
+par(mar=c(3,3,3,1), mgp=c(2,.5,0))
+t <- os
+s <- survfit(os~1)
+q <- quantile(t[,1], seq(0,1,.1))# q <- splinefun( s$surv, s$time,"monoH.FC")(seq(1,min(s$surv),l=10))
+c <- cut(t[,1], q, na.rm=TRUE)
+h <- coxRFXFitOsTDGGc$linear.predictors
+o <- order(h)
+
+plot(h[o], col= (brewer.pal(10,'RdBu'))[c[o]], type='h', xaxt="n", xlab='Patient', las=2, ylab="log hazard")
+u <- par("usr")
+q <- pmin(q,365*12)
+image(x=q/max(q)*500, y=c(u[4]-(u[4]-u[3])/20, u[4]), matrix(1:10), col= (brewer.pal(10,'RdBu')), add=TRUE)
+#axis(side=3, at=seq(1,500,l=11), labels=seq(0,1,.1))
+axis(side=3, at=pretty(q/365)/max(q)*365*500, labels=pretty(q/365))
+lines(ksmooth(seq_along(o),t[o,2]==0, bandwidth=50))
+
+```
+
+
+Multistage Model predictor
+
+
+
+```{r multistage, message=FALSE, warning=FALSE}
+
+library(msSurv)
+library(dplyr)
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#  install.packages("BiocManager")
+
+#BiocManager::install("graph")
+
+
+#outcome data
+os_ms <- read.csv("endpoints_final.csv", header = TRUE, check.names = FALSE, stringsAsFactors = FALSE, row.names = 1)
+os_ms <- filter(os_ms, rownames(os_ms) %in% rownames(Clin_new))
+#head(os_ms)
+#rownames(os_ms) <- os_ms$Sample
+
+#os_ms <- filter(os_ms, !rownames(os_ms) %in% patientsdrop)
+
+
+
+
+os_ms <- os_ms[,!(names(os_ms) %in% drop)]
+#head(os_ms)
+
+os_new <- os_ms
+#head(os_new)
+
+
+
+
+
+for (i in 2:ncol(os_new)){os_new[,i] <- as.numeric(as.character(os_new[,i]))}
+
+#try with as.numeric(os_new$Erdate[i]) = 0 - time for first visit - they changed from dates to time periods
+#so recoding is needed and date isn't the correct thing to use.
+
+d <- sapply(1:nrow(os_new), function(i){
+  i <<- i
+  t <- c(as.numeric(os_new[i,c("time_to_cr","time_to_relapse","time_to_fu")]) - 0)
+  o <- order(t, na.last=NA)
+  stages <- c(1:3,0)
+  r <- stages[c(1, o+1)]
+  if(os_new$sstat[i])
+    r[length(r)] <- r[length(r)-1] +3
+  tt <- c(0,t[o])
+  if(length(o)==0)
+    return(c(rep(NA,7),i))
+  s <- cbind(id=i, stop=tt[-1], start.stage=r[-length(r)], end.stage=r[-1])[diff(tt)!=0,]
+  #s <- cbind(time1 = tt[-length(tt)], time2=tt[-1], death=c(rep(0, length(o)-1), osDATA$Status[i]), outer(0:(length(o)-1), r[-3], `>=`)+0, i=i)[diff(tt)!=0,]
+  return(s)
+})
+
+# had problems something with the erdate variable - made it zero which is what they have and now it works
+
+
+d <- as.data.frame(do.call("rbind",d))
+nodes <- as.character(1:6)
+edges <- list(`1`=list(edges=c("2","4")), `2`=list(edges=c("3","5")), `3`=list(edges="6"), `4`=list(edges=NULL),
+              `5`=list(edges=NULL),`6`=list(edges=NULL))
+struct <- new("graphNEL", nodes = nodes, edgeL = edges, edgemode = "directed")
+msurv <- msSurv(d, struct, bs = FALSE)
+```
+
+
+
+```{r diff_states, message=FALSE, warning=FALSE}
+y <- t(apply(cbind(1,-msurv@ps[,c(4:6, 3:1)]),1,cumsum))
+par(mar=c(3,3,1,1), bty="n", mgp=c(2,.5,0), las=1)
+plot(msurv@et/365.25, y[,1], ylim=c(0,1), type="s",lty=0, xlab="Time after diagnosis", ylab="Fraction of patients", xlim=c(0,10), xaxs="i", yaxs="i")
+steps <- function(x, type="s") rep(x, each=2)[if(type=="s") -1 else -2*length(x)]
+x <- steps(msurv@et/365.25, type="S")
+for(i in 1:6)
+  polygon(c(x, rev(x)), c(steps(y[,i]), rev(steps(y[,i+1])) ), col=c(brewer.pal(5,"Pastel1")[c(1:3,5,4)],"#DDDDDD")[i], border=NA)
+abline(h=seq(0,1,.2), col='white', lty=3)
+abline(v=seq(0,10,1), col='white', lty=3)
+lines(x, steps(y[,4]), lwd=2)
+w <- which.min(abs(msurv@et/365.25-10))
+text(x=par("usr")[2], y= y[w,-7]+diff(y[w,])/2, labels=c("early death","death in CR","death after relapse","alive with relapse","alive in remission","induction/LOF"), pos=2)
+
+
+```
+
+setup for the multistage stuff so that we can get the individual end states plots
+
+
+```{r diff_states_prep, message=FALSE, warning=FALSE}
+
+library(CoxHD)
+alloTimeCR1 <- os_new$time_to_cr + .5 # +.5 to make > 0
+
+whichRFXRel <- whichRFXOsTDGG[grep("TPL",names(whichRFXOsTDGG), invert=TRUE)] 
+
+t <- os_new$time_to_relapse
+t[is.na(t)] <- as.Date(1e6, origin="2000-01-01")
+
+
+relData <- MakeTimeDependent(dataFrame[whichRFXRel], timeEvent=alloTimeCR1,
+                    timeStop=as.numeric(pmin(t, os_new$time_to_fu) - os_new$time_to_cr), 
+                    status=!is.na(os_new$time_to_relapse)+0)
+
+
+nrdData <- MakeTimeDependent(dataFrame[whichRFXRel], timeEvent=alloTimeCR1, 
+                             timeStop=as.numeric(pmin(t, os_new$time_to_fu) - os_new$time_to_cr), 
+                             status=is.na(os_new$time_to_relapse) & os_new$sstat)
+
+alloTimeRel <- os_new$time_relapse + .5 # +.5 to make > 0
+
+
+
+
+
+i <- !is.na(os_new$time_to_relapse)
+prdData <- MakeTimeDependent(dataFrame[i,whichRFXRel], timeEvent=alloTimeRel[i],
+                             timeStop=as.numeric(os_new$time_to_fu - os_new$time_to_relapse)[i], 
+                             status=os_new$sstat[i])
+
+w <- which(prdData$time1 == prdData$time2) ## 5 cases with LF=Rec
+prdData$time2[w] <- prdData$time2[w] + .5
+
+
+
+
+crGroups <- c(as.character(groups[whichRFXRel]))
+names(crGroups) <- c(names(dataFrame)[whichRFXRel])
+
+
+
+
+coxRFXNrdTD <- CoxRFX(nrdData[names(crGroups)], Surv(nrdData$time1, nrdData$time2, nrdData$status), 
+                      groups=crGroups,nu=1, which.mu = NULL)  ## Relpaced intersect(mainGroups, unique(crGroups)) with NULL to get it to work 
+
+coxRFXPrdTD <- CoxRFX(prdData[names(crGroups)], Surv(prdData$time1, prdData$time2, prdData$status), 
+                      groups=crGroups, nu=1, which.mu = intersect(mainGroups, unique(crGroups)))
+#takes a few seconds to run above
+
+
+coxRFXRelTD <- CoxRFX(relData[names(crGroups)], Surv(relData$time1, relData$time2, relData$status), 
+                      groups=crGroups,nu=1, which.mu = intersect(mainGroups, unique(crGroups)))
+
+#added nu=1 to get coefficients that are not NA
+#takes a few seconds to run above
+
+
+osData2 <- MakeTimeDependent(dataFrame[whichRFXRel], timeEvent=alloTimeCR1, timeStop=as.numeric(os_new$time_to_fu - os_new$time_to_cr), status=os_new$sstat)
+
+## Quick fix to make sure all columns are the same 
+
+coxRFXOsCR <- CoxRFX(osData2[names(crGroups)], Surv(osData2$time1, osData2$time2, osData2$status), 
+                     groups=crGroups, which.mu = intersect(mainGroups, unique(crGroups)))
+
+table(CR=!is.na(os_new$time_to_cr), os[,2])
+c <- as.numeric(os_new$time_to_cr - 0)
+c[is.na(c)] <- os_new$time_to_fu[is.na(c)]
+cr <- Surv(c, factor(pmin(2 * (!is.na(os_new$time_to_cr))+os[,2],2), levels=0:2, 
+                     labels=c("cens","ED","CR")), type="mstate")
+coxRFXCrTD <- CoxRFX(osData2[1:1021, names(crGroups)], Surv(cr[,1], cr[,2]==2), groups=crGroups,nu=1,
+                     which.mu = intersect(mainGroups, unique(crGroups)))
+coxRFXNcdTD <- CoxRFX(osData2[1:1021, names(crGroups)], Surv(cr[,1], cr[,2]==1), groups=crGroups, nu = 1,  which.mu = intersect(mainGroups, unique(crGroups)))
+
+#replaced which.mu=NULL with nu=1 to get coefficients that are not NA
+```
+
+Early Death pie chart
+
+```{r pie_ed, message=FALSE, warning=FALSE}
+o <- c(1,4,6,5,2,3,7,8)
+PlotVarianceComponents(coxRFXNcdTD, col=colGroups, order=o)
+title(main="Early deaths")
+
+```
+
+Remission pie chart
+
+```{r pie_rem, message=FALSE, warning=FALSE}
+PlotVarianceComponents(coxRFXCrTD, col=colGroups, order=o)
+title(main="Remission")
+
+
+
+```
+
+Relapse pie chart
+
+```{r Pie_relapse, message=FALSE, warning=FALSE}
+
+PlotVarianceComponents(coxRFXRelTD, col=colGroups, order=o)
+title(main="Relapse")
+
+
+```
+
+
+Non-relapse deaths pie chart
+
+```{r pie_nonreldeath, message=FALSE, warning=FALSE}
+PlotVarianceComponents(coxRFXNrdTD, col=colGroups, order=o)
+title(main="Non-relapse deaths")
+
+```
+
+
+Post relapse death pie chart
+
+
+```{r piepostreldeath, message=FALSE, warning=FALSE}
+PlotVarianceComponents(coxRFXPrdTD, col=colGroups, order=o)
+title(main="Post-relapse deaths")
+
+```
+
+
+
+
+```{r barplots1, message=FALSE, warning=FALSE}
+par(mar=c(4,3,1,5))
+allVarComp <- sapply(c("NcdTD","CrTD","NrdTD","RelTD","PrdTD"), function(x){
+  m <- get(paste0("coxRFX",x))
+  Z <- get(sub("\\[.+","",as.character(m$call["data"])))
+  i <- if(x%in%c("CrTD","EsTD")) 1:1021 else Z$index
+  VarianceComponents(m, newZ=Z[!rev(duplicated(rev(i))),colnames(m$Z)])})
+colnames(allVarComp) <- c("Early deaths","Remission","Non-relapse d.","Relapse","Post-relapse d.")
+w <- c("CNA","Fusions","Genetics","GeneGene","Clinical","Demographics", "Nuisance", "Epitype")
+z <- allVarComp[w,]/rep(colSums(allVarComp[-8,]), each=7)
+b <- barplot(z, col=colGroups[w], ylab="Variance [log hazard]", names.arg=rep("",ncol(z)))
+rotatedLabel(x0=b, labels=colnames(z))
+Z <- rbind(0,apply(z,2,cumsum))
+n <- ncol(z)
+segments(b[-n]+.5,t(Z[,-n]),b[-1]-.5 ,t(Z[,-1]))
+
+
+```
+
+
+
+
+```{r barplots2, message=FALSE, warning=FALSE}
+
+
+colSums(allVarComp[-9,])
+
+
+z <- allVarComp[w,]/rep(colSums(allVarComp[-9,]), each=8)
+
+z
+b <- barplot(z, col=colGroups[w], ylab="Relative importance", names.arg=rep("",ncol(z)))
+rotatedLabel(x0=b, labels=colnames(z))
+Z <- rbind(0,apply(z,2,cumsum))
+n <- ncol(z)
+segments(b[-n]+.5,t(Z[,-n]),b[-1]-.5 ,t(Z[,-1]))
+mtext(side=4, at=Z[-1,n] - diff(Z[,n])/2, text=rownames(Z)[-1], las=2)
+
+```
+
+
+
+
+```{r barplots3, message=FALSE, warning=FALSE}
+
+z <- allVarComp[w,]
+
+v <- c(1,3,5,4,2)
+b <- barplot(z, col=colGroups[w], ylab="Relative importance", names.arg=rep("",ncol(z)))
+rotatedLabel(x0=b, labels=colnames(z))
+Z <- rbind(0,apply(z,2,cumsum))
+n <- ncol(z)
+segments(b[-n]+.5,t(Z[,-n]),b[-1]-.5 ,t(Z[,-1]))
+mtext(side=4, at=Z[-1,n] - diff(Z[,n])/2, text=rownames(Z)[-1], las=2)
+
+
+
+```
+
+
+
+
+Models concordance
+
+```{r concordance2, messsage=FALSE, warning=FALSE}
+
+coxRFXPrdTD$concordance
+
+coxRFXNrdTD$concordance
+
+coxRFXRelTD$concordance
+
+coxRFXNcdTD$concordance
+
+coxRFXOsCR$concordance
+
+```
+Relapse data Volcano plot and table
+
+
+
+```{r}
+
+osRel <- Surv(relData$time1, relData$time2, relData$status)
+
+#relData2 <- relData[,-c(113:118)]  #change columns to delete
+relData2 <- relData[,names(coxRFXRelTD$coefficients)]
+
+whichRFX <- which((colSums(relData2)>= 0))
+
+set.seed(42)
+risk <- as.matrix(relData2) %*% coxRFXRelTD$coefficients
+risk <- risk - mean(risk)
+
+```
+
+
+#########this takes time###################
+parBoot1 <- mclapply(1:100, function(i) {
+  s <- SimSurvNonp(risk, osRel)
+  c <- try(CoxRFX(relData2[whichRFX], s, groups=groups[whichRFX], sigma0=0.1, nu=0))
+  if(inherits(c, "try-error"))
+    return(s)
+  c$Z <- NULL # set X to zero to save mem
+  return(c)
+} )
+
+save(parBoot1, file = "parBoot1Epi.Rda" )
+
+
+```{r RD, message=FALSE, warning=FALSE}
+
+load(file = "parBoot1Epi.Rda")
+
+
+```
+
+
+```{r}
+w <- diag(coxRFXRelTD$var) ## H^{-1}
+w2 <- diag(coxRFXRelTD$var2) ## H^{-1} I H^{-1}
+c <- coef(coxRFXRelTD)
+
+```
+
+```{r rel2, message=FALSE, warning=FALSE}
+
+pBoot <- pchisq(c^2/v,1, lower.tail=FALSE)
+pVar2 <- pchisq(c^2/w2,1, lower.tail=FALSE)
+pVar <- pchisq(c^2/w,1, lower.tail=FALSE)
+
+Quack <- dataRaw[whichRFXRel]
+
+
+waldOut1 <- data.frame(group = groups[whichRFXRel], 
+                      `beta (log-hazard)`= c, 
+                      `hazard exp(beta)` = exp(c),
+                      n = ifelse(groups[whichRFXRel] %in% c("CNA","Fusions","Genetics","GeneGene", "Nuisance", "Epitype"), 
+                                 colSums(dataRaw[sub("_10*$","",names(whichRFXRel))], na.rm=TRUE), NA),
+                      
+                      n2 = ifelse(groups[whichRFXRel] %in% c("Demographics","Clinical"), 
+                                 colSums(Quack != "", na.rm=TRUE), NA),
+                      sd = sqrt(w2), 
+                      
+                      `sd (var)`= sqrt(w),
+                      `P-value`=pVar2,
+                      `Q (Benjamini-Yekutieli)` = p.adjust(pVar2, "BY"),
+                      `Q (Benjamini-Hochberg)` = p.adjust(pVar2, "BH"),
+                      check.names=FALSE
+)
+
+
+
+waldOut1$n2[is.na(waldOut1$n2)] <- 0
+waldOut1$n[is.na(waldOut1$n)] <- 0
+
+waldOut1$n <- waldOut1$n + waldOut1$n2
+
+waldOut1 <- waldOut1[,-5]
+
+
+
+
+
+datatable(as.data.frame(lapply(waldOut1, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE
+                        , row.names=row.names(waldOut1)))
+waldOutDataTable1 <- as.data.frame(lapply(waldOut1, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE, row.names=row.names(waldOut))
+
+```
+
+
+``` {r volcano relapse}
+#Volcano plot
+
+par(mar=c(3,3,1,1)+.1,  bty="n", mgp=c(2,.5,0))
+par(mfrow=c(1,1))
+
+i <- coxRFXRelTD$groups %in% c("Genetics", "CNA","Fusions","GeneGene","Epitype", "Nuisance")#apply(coxRFXFitOsTDGGc$Z,2,min) == 0 & apply(coxRFXFitOsTDGGc$Z,2,max) == 1
+p <- pVar2 ## pvalues coxRFX
+plot(c, 1/p, log='y', col=paste(colGroups[as.character(coxRFXRelTD$groups)],"BB", sep=""), pch=ifelse(i,16,16), ylab="P-value",xlab="log hazard", cex=ifelse(i, sqrt(colMeans(coxRFXFitOsTDGGc$Z)*50),1), xlim=range(c*1.2))
+#abline(h=qchisq(c(0.95,0.99,0.999), 1, lower.tail=TRUE), lty=c(1,2,3))
+w <- which(p.adjust(p,"BH") < 0.1)
+points(c[w], 1/p[w],  pch=1, cex=ifelse(i[w], sqrt(colMeans(coxRFXRelTD$Z[,w])*50),1))
+w <- which(p.adjust(p,"BH") < 0.05)
+par(xpd=NA)
+text(c[w], 1/p[w], names(c[w]), pos=3)
+u <- par("usr")
+f <- c(0.01,0.05,0.1,0.2,0.5)
+s <- sqrt(f*50)
+legend("topright",legend=f, pch=16, pt.cex=s, bty='n', col=paste("#88888888"))
+par(xpd=FALSE)
+#abline(h=1/0.05, lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.05)]), lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.1)]), lty=3)
+
+```
+
+
+
+Post relapse Data Volcano plot and Table 
+
+```{r postrelapse, message=FALSE, warning=FALSE}
+
+library(survival)
+#this worked with the dataset wtih 1252 pts on 7/22/2021
+
+
+osPrd <- survival::Surv(prdData$time1, prdData$time2, prdData$status)
+
+mainGroups <- grep("[A-Z][a-z]+[A-Z]",levels(groups), invert=TRUE, value=TRUE)
+mainGroups
+
+mainIdx <- groups %in% mainGroups
+```
+
+
+library(survival)
+
+osPrd <- survival::Surv(prdData$time1, prdData$time2, prdData$status)
+
+prdData2 <- prdData[,names(coxRFXPrdTD$coefficients)]  #change columns to delete
+mainGroups <- grep("[A-Z][a-z]+[A-Z]",levels(groups), invert=TRUE, value=TRUE)
+mainGroups
+
+mainIdx <- groups %in% mainGroups
+whichRFX <- which((colSums(prdData2)>= 0)  )    #removed |MainIdx
+
+set.seed(42)
+risk <- as.matrix(prdData2) %*% coxRFXPrdTD$coefficients
+risk <- risk - mean(risk)
+
+SimSurvNonpS <- function(risk, surv, H0 = basehaz(coxph(surv ~ 1))) {
+H0 = basehaz(coxph(os ~ 1))
+FHazInv <- splinefun(c(0,H0$hazard), c(0,H0$time), method="monoH.FC", ties=min)
+n = length(risk)
+deathTimes = FHazInv(rexp(n, exp(risk))) #predict(hazardDist, rexp(n, exp(risk))) }
+
+f <- os
+f[,2] <- 1-f[,2]
+F <- survfit(f~1)
+FCensInv <- splinefun(F$surv, F$time, ties=min )
+censTimes <- FCensInv(runif(n,0,1)) ## Simulate censoring times
+
+survOut <-  Surv(time = pmax(0,pmin(deathTimes, censTimes)), event=(deathTimes < censTimes)+0)
+return(survOut) }
+
+parBoot2 <- mclapply(1:100, function(i) {
+  s <- SimSurvNonpS(risk, osPrd)
+  c <- try(CoxRFX(prdData2[whichRFX], s, groups=groups[whichRFX], sigma0=0.1, nu=0))
+  if(inherits(c, "try-error"))
+   return(s)
+  c$Z <- NULL # set X to zero to save mem
+  return(c)
+} )
+save(parBoot2, file = "parBoot2Epi.Rda")
+
+
+```{r}
+
+load(file = "parBoot2Epi.Rda")
+
+w <- diag(coxRFXPrdTD$var) ## H^{-1}
+w2 <- diag(coxRFXPrdTD$var2) ## H^{-1} I H^{-1}
+c <- coef(coxRFXPrdTD)
+```
+
+``` {r wald postrelapse}
+
+pBoot <- pchisq(c^2/v,1, lower.tail=FALSE)
+pVar2 <- pchisq(c^2/w2,1, lower.tail=FALSE)
+pVar <- pchisq(c^2/w,1, lower.tail=FALSE)
+
+
+
+Quack <- dataRaw[whichRFXRel]
+
+
+waldOut2 <- data.frame(group = groups[whichRFXRel], 
+                      `beta (log-hazard)`= c, 
+                      `hazard exp(beta)` = exp(c),
+                      n = ifelse(groups[whichRFXRel] %in% c("CNA","Fusions","Genetics","GeneGene", "Nuisance", "Epitype"), 
+                                 colSums(dataRaw[sub("_10*$","",names(whichRFXRel))], na.rm=TRUE), NA),
+                      
+                      n2 = ifelse(groups[whichRFXRel] %in% c("Demographics","Clinical"), 
+                                 colSums(Quack != "", na.rm=TRUE), NA),
+                      sd = sqrt(w2), 
+                      
+                      `sd (var)`= sqrt(w),
+                      `P-value`=pVar2,
+                      `Q (Benjamini-Yekutieli)` = p.adjust(pVar2, "BY"),
+                      `Q (Benjamini-Hochberg)` = p.adjust(pVar2, "BH"),
+                      check.names=FALSE
+)
+
+
+waldOut2$n2[is.na(waldOut2$n2)] <- 0
+waldOut2$n[is.na(waldOut2$n)] <- 0
+
+waldOut2$n <- waldOut2$n + waldOut2$n2
+
+waldOut2 <- waldOut2[,-5]
+
+
+
+
+datatable(as.data.frame(lapply(waldOut2, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE
+                        , row.names=row.names(waldOut2)))
+waldOutDataTable2 <- as.data.frame(lapply(waldOut2, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE, row.names=row.names(waldOut2))
+
+
+```
+
+
+``` {r volcano post relapse}
+#Volcano plot
+par(mar=c(3,3,1,1)+.1,  bty="n", mgp=c(2,.5,0))
+par(mfrow=c(1,1))
+
+i <- coxRFXPrdTD$groups %in% c("Genetics", "CNA","Fusions","GeneGene", "Nuisance", "Epitype")#apply(coxRFXFitOsTDGGc$Z,2,min) == 0 & apply(coxRFXFitOsTDGGc$Z,2,max) == 1
+p <- pVar2 ## pvalues coxRFX
+plot(c, 1/p, log='y', col=paste(colGroups[as.character(coxRFXPrdTD$groups)],"BB", sep=""), pch=ifelse(i,16,16), ylab="P-value",xlab="log hazard", cex=ifelse(i, sqrt(colMeans(coxRFXPrdTD$Z)*50),1), xlim=range(c*1.2))
+#abline(h=qchisq(c(0.95,0.99,0.999), 1, lower.tail=TRUE), lty=c(1,2,3))
+w <- which(p.adjust(p,"BH") < 0.1)
+points(c[w], 1/p[w],  pch=1, cex=ifelse(i[w], sqrt(colMeans(coxRFXPrdTD$Z[,w])*50),1))
+w <- which(p.adjust(p,"BH") < 0.05)
+par(xpd=NA)
+text(c[w], 1/p[w], names(c[w]), pos=3)
+u <- par("usr")
+f <- c(0.01,0.05,0.1,0.2,0.5)
+s <- sqrt(f*50)
+legend("topright",legend=f, pch=16, pt.cex=s, bty='n', col=paste("#88888888"))
+par(xpd=FALSE)
+#abline(h=1/0.05, lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.05)]), lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.1)]), lty=3)
+
+```
+
+
+
+Complete Remission data volcano plot and table 
+
+```{r CRdata , message=FALSE, warning=FALSE}
+
+library(survival)
+osData3 <- osData2[1:1014, names(crGroups)]
+
+whichRFX <- which((colSums(osData3)>= 0)  )    #| mainIdx
+
+
+set.seed(42)
+risk <- as.matrix(osData3) %*% coxRFXCrTD$coefficients
+risk <- risk - mean(risk)
+
+
+osCR <- survival::Surv(cr[,1], cr[,2]==2)
+
+```
+
+parBoot3 <- mclapply(1:100, function(i) {
+  s <- SimSurvNonpS(risk, osCR)
+  c <- try(CoxRFX(osData3[whichRFX], s, groups=groups[whichRFX], sigma0=0.1, nu=0))
+  if(inherits(c, "try-error"))
+    return(s)
+  c$Z <- NULL # set X to zero to save mem
+  return(c)
+} )
+
+
+save(parBoot3, file = "parBoot3Epi.Rda")
+
+```{r}
+load(file = "parBoot3Epi.Rda")
+
+
+w <- diag(coxRFXCrTD$var) ## H^{-1}
+w2 <- diag(coxRFXCrTD$var2) ## H^{-1} I H^{-1}
+c <- coef(coxRFXCrTD)
+
+```
+
+
+``` {R wald CR}
+
+
+
+pBoot <- pchisq(c^2/v,1, lower.tail=FALSE)
+pVar2 <- pchisq(c^2/w2,1, lower.tail=FALSE)
+pVar <- pchisq(c^2/w,1, lower.tail=FALSE)
+
+
+Quack <- dataRaw[whichRFXRel]
+
+
+waldOut3 <- data.frame(group = groups[whichRFXRel], 
+                      `beta (log-hazard)`= c, 
+                      `hazard exp(beta)` = exp(c),
+                      n = ifelse(groups[whichRFXRel] %in% c("CNA","Fusions","Genetics","GeneGene", "Nuisance", "Epitype"), 
+                                 colSums(dataRaw[sub("_10*$","",names(whichRFXRel))], na.rm=TRUE), NA),
+                      
+                      n2 = ifelse(groups[whichRFXRel] %in% c("Demographics","Clinical"), 
+                                 colSums(Quack != "", na.rm=TRUE), NA),
+                      sd = sqrt(w2), 
+                      
+                      `sd (var)`= sqrt(w),
+                      `P-value`=pVar2,
+                      `Q (Benjamini-Yekutieli)` = p.adjust(pVar2, "BY"),
+                      `Q (Benjamini-Hochberg)` = p.adjust(pVar2, "BH"),
+                      check.names=FALSE
+)
+
+
+
+waldOut3$n2[is.na(waldOut3$n2)] <- 0
+waldOut3$n[is.na(waldOut3$n)] <- 0
+
+waldOut3$n <- waldOut3$n + waldOut3$n2
+
+waldOut3 <- waldOut3[,-5]
+
+
+
+
+
+datatable(as.data.frame(lapply(waldOut3, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE
+                        , row.names=row.names(waldOut3)))
+waldOutDataTable3 <- as.data.frame(lapply(waldOut3, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE, row.names=row.names(waldOut3))
+
+
+```
+
+
+``` {R CR volcano}
+
+
+#Volcano plot
+par(mar=c(3,3,1,1)+.1,  bty="n", mgp=c(2,.5,0))
+par(mfrow=c(1,1))
+
+i <- coxRFXCrTD$groups %in% c("Genetics", "CNA","Fusions","GeneGene", "Nuisance", "Epitype")
+p <- pVar2 ## pvalues coxRFX
+plot(c, 1/p, log='y', col=paste(colGroups[as.character(coxRFXCrTD$groups)],"BB", sep=""), pch=ifelse(i,16,16), ylab="P-value",xlab="log hazard", cex=ifelse(i, sqrt(colMeans(coxRFXCrTD$Z)*50),1), xlim=range(c*1.2))
+#abline(h=qchisq(c(0.95,0.99,0.999), 1, lower.tail=TRUE), lty=c(1,2,3))
+w <- which(p.adjust(p,"BH") < 0.1)
+points(c[w], 1/p[w],  pch=1, cex=ifelse(i[w], sqrt(colMeans(coxRFXCrTD$Z[,w])*50),1))
+w <- which(p.adjust(p,"BH") < 0.05)
+par(xpd=NA)
+text(c[w], 1/p[w], names(c[w]), pos=3)
+u <- par("usr")
+f <- c(0.01,0.05,0.1,0.2,0.5)
+s <- sqrt(f*50)
+legend("topright",legend=f, pch=16, pt.cex=s, bty='n', col=paste("#88888888"))
+par(xpd=FALSE)
+#abline(h=1/0.05, lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.05)]), lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.1)]), lty=3)
+
+```
+
+
+ Non-complete remission death 
+
+```{r Ncddata, message=FALSE, warning=FALSE}
+
+library(survival)
+
+
+osNcd <- survival::Surv(cr[,1], cr[,2]==1)
+osData3 <- osData2[1:1014, names(crGroups)]
+
+whichRFX <- which((colSums(osData3)>= 0))
+
+set.seed(42)
+risk <- as.matrix(osData3) %*% coxRFXNcdTD$coefficients
+risk <- risk - mean(risk)
+
+
+```
+
+parBoot4 <- mclapply(1:100, function(i) {
+  s <- SimSurvNonpS(risk, osNcd)
+  c <- try(CoxRFX(osData3[whichRFX], s, groups=groups[whichRFX], sigma0=0.1, nu=0))
+  if(inherits(c, "try-error"))
+    return(s)
+  c$Z <- NULL # set X to zero to save mem
+  return(c)
+} )
+
+save(parBoot4, file = "parBoot4Epi.Rda")
+
+```{r}
+load(file = "parBoot4Epi.Rda")
+
+
+w <- diag(coxRFXNcdTD$var) ## H^{-1}
+w2 <- diag(coxRFXNcdTD$var2) ## H^{-1} I H^{-1}
+c <- coef(coxRFXNcdTD)
+pVar2 <- pchisq(c^2/w2,1, lower.tail=FALSE)
+pVar <- pchisq(c^2/w,1, lower.tail=FALSE)
+```
+
+```{r Ncd2 wald, message=FALSE, warning=FALSE}
+
+Quack <- dataRaw[whichRFXRel]
+
+
+waldOut4 <- data.frame(group = groups[whichRFXRel], 
+                      `beta (log-hazard)`= c, 
+                      `hazard exp(beta)` = exp(c),
+                      n = ifelse(groups[whichRFXRel] %in% c("CNA","Fusions","Genetics","GeneGene", "Nuisance", "Epitype"), 
+                                 colSums(dataRaw[sub("_10*$","",names(whichRFXRel))], na.rm=TRUE), NA),
+                      
+                      n2 = ifelse(groups[whichRFXRel] %in% c("Demographics","Clinical"), 
+                                 colSums(Quack != "", na.rm=TRUE), NA),
+                      sd = sqrt(w2), 
+                      
+                      `sd (var)`= sqrt(w),
+                      `P-value`=pVar2,
+                      `Q (Benjamini-Yekutieli)` = p.adjust(pVar2, "BY"),
+                      `Q (Benjamini-Hochberg)` = p.adjust(pVar2, "BH"),
+                      check.names=FALSE
+)
+
+
+
+
+waldOut4$n2[is.na(waldOut4$n2)] <- 0
+waldOut4$n[is.na(waldOut4$n)] <- 0
+
+waldOut4$n <- waldOut4$n + waldOut4$n2
+
+waldOut4 <- waldOut4[,-5]
+
+
+
+
+
+
+datatable(as.data.frame(lapply(waldOut4, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE
+                        , row.names=row.names(waldOut4)))
+waldOutDataTable4 <- as.data.frame(lapply(waldOut4, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE, row.names=row.names(waldOut4))
+
+```
+
+
+``` {R NCD volcano}
+#Volcano plot
+par(mar=c(3,3,1,1)+.1,  bty="n", mgp=c(2,.5,0))
+par(mfrow=c(1,1))
+
+i <- coxRFXNcdTD$groups %in% c("Genetics", "CNA","Fusions","GeneGene", "Nuisance", "Epitype")
+p <- pVar2 ## pvalues coxRFX
+plot(c, 1/p, log='y', col=paste(colGroups[as.character(coxRFXNcdTD$groups)],"BB", sep=""), pch=ifelse(i,16,16), ylab="P-value",xlab="log hazard", cex=ifelse(i, sqrt(colMeans(coxRFXNcdTD$Z)*50),1), xlim=range(c*1.2))
+#abline(h=qchisq(c(0.95,0.99,0.999), 1, lower.tail=TRUE), lty=c(1,2,3))
+w <- which(p.adjust(p,"BH") < 0.1)
+points(c[w], 1/p[w],  pch=1, cex=ifelse(i[w], sqrt(colMeans(coxRFXNcdTD$Z[,w])*50),1))
+w <- which(p.adjust(p,"BH") < 0.05)
+par(xpd=NA)
+text(c[w], 1/p[w], names(c[w]), pos=3)
+u <- par("usr")
+f <- c(0.01,0.05,0.1,0.2,0.5)
+s <- sqrt(f*50)
+legend("topright",legend=f, pch=16, pt.cex=s, bty='n', col=paste("#88888888"))
+par(xpd=FALSE)
+#abline(h=1/0.05, lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.05)]), lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.1)]), lty=3)
+
+```
+
+
+
+Nonrelapse death
+
+
+
+```{r Nrd, message=FALSE, warning=FALSE}
+
+sNrd <- Surv(nrdData$time1, nrdData$time2, nrdData$status)
+
+nrdData2 <- nrdData[,names(coxRFXNrdTD$coefficients)]
+
+whichRFX <- which((colSums(nrdData2)>= 0) )
+
+set.seed(42)
+risk <- as.matrix(nrdData2) %*% coxRFXNrdTD$coefficients
+risk <- risk - mean(risk)
+```
+
+parBoot5 <- mclapply(1:100, function(i) {
+  s <- SimSurvNonpS(risk, osNrd)
+  c <- try(CoxRFX(nrdData2[whichRFX], s, groups=groups[whichRFX], sigma0=0.1, nu=0))
+  if(inherits(c, "try-error"))
+    return(s)
+  c$Z <- NULL # set X to zero to save mem
+  return(c)
+} )
+
+save(parBoot5, file = "parBoot5Epi.Rda")
+
+
+save(parBoot5, file = "parBoot5Epi.Rda")
+save(parBoot4, file = "parBoot4Epi.Rda")
+save(parBoot3, file = "parBoot3Epi.Rda")
+save(parBoot2, file = "parBoot2Epi.Rda")
+save(parBoot1, file = "parBoot1Epi.Rda")
+
+
+``` {r NRD}
+
+#load(file = "parBoot5Nuis.Rda")
+
+w <- diag(coxRFXNrdTD$var) ## H^{-1}
+w2 <- diag(coxRFXNrdTD$var2) ## H^{-1} I H^{-1}
+c <- coef(coxRFXNrdTD)
+```
+
+``` {r NRD wald }
+pBoot <- pchisq(c^2/v,1, lower.tail=FALSE)
+pVar2 <- pchisq(c^2/w2,1, lower.tail=FALSE)
+pVar <- pchisq(c^2/w,1, lower.tail=FALSE)
+
+
+#Clinical and Demographic aren't in c bc the n is large but all the pvalue info is in the table.
+Quack <- dataRaw[whichRFXRel]
+
+
+waldOut5 <- data.frame(group = groups[whichRFXRel], 
+                      `beta (log-hazard)`= c, 
+                      `hazard exp(beta)` = exp(c),
+                      n = ifelse(groups[whichRFXRel] %in% c("CNA","Fusions","Genetics","GeneGene", "Nuisance", "Epitype"), 
+                                 colSums(dataRaw[sub("_10*$","",names(whichRFXRel))], na.rm=TRUE), NA),
+                      
+                      n2 = ifelse(groups[whichRFXRel] %in% c("Demographics","Clinical"), 
+                                 colSums(Quack != "", na.rm=TRUE), NA),
+                      sd = sqrt(w2), 
+                      
+                      `sd (var)`= sqrt(w),
+                      `P-value`=pVar2,
+                      `Q (Benjamini-Yekutieli)` = p.adjust(pVar2, "BY"),
+                      `Q (Benjamini-Hochberg)` = p.adjust(pVar2, "BH"),
+                      check.names=FALSE
+)
+
+
+waldOut5$n2[is.na(waldOut5$n2)] <- 0
+waldOut5$n[is.na(waldOut5$n)] <- 0
+
+waldOut5$n <- waldOut5$n + waldOut5$n2
+
+waldOut5 <- waldOut5[,-5]
+
+
+
+
+datatable(as.data.frame(lapply(waldOut5, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE
+                        , row.names=row.names(waldOut5)))
+waldOutDataTable5 <- as.data.frame(lapply(waldOut5, function(x) if(class(x)=="numeric") round(x,4) else x), check.names=FALSE, row.names=row.names(waldOut5))
+
+```
+
+``` {R NRD volcano}
+#Volcano plot
+par(mar=c(3,3,1,1)+.1,  bty="n", mgp=c(2,.5,0))
+par(mfrow=c(1,1))
+
+i <- coxRFXNrdTD$groups %in% c("Genetics", "CNA","Fusions","GeneGene", "Nuisance", "Epitype")
+p <- pVar2 ## pvalues coxRFX
+plot(c, 1/p, log='y', col=paste(colGroups[as.character(coxRFXNrdTD$groups)],"BB", sep=""), pch=ifelse(i,16,16), ylab="P-value",xlab="log hazard", cex=ifelse(i, sqrt(colMeans(coxRFXNrdTD$Z)*50),1), xlim=range(c*1.2))
+#abline(h=qchisq(c(0.95,0.99,0.999), 1, lower.tail=TRUE), lty=c(1,2,3))
+w <- which(p.adjust(p,"BH") < 0.1)
+points(c[w], 1/p[w],  pch=1, cex=ifelse(i[w], sqrt(colMeans(coxRFXNrdTD$Z[,w])*50),1))
+w <- which(p.adjust(p,"BH") < 0.05)
+par(xpd=NA)
+#text(c[w], 1/p[w], names(c[w]), pos=3)
+u <- par("usr")
+f <- c(0.01,0.05,0.1,0.2,0.5)
+s <- sqrt(f*50)
+legend("topright",legend=f, pch=16, pt.cex=s, bty='n', col=paste("#88888888"))
+par(xpd=FALSE)
+#abline(h=1/0.05, lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.05)]), lty=2)
+abline(h=1/max(p[which(p.adjust(p,"BH") < 0.1)]), lty=3)
+
+
+
+```
